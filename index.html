@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RoboDK Side-by-Side Video Maker</title>
+<style>
+:root{font-family:Inter,Segoe UI,Arial,sans-serif;color:#172033;background:#f3f6fa}*{box-sizing:border-box}
+body{margin:0;padding:32px}.app{max-width:920px;margin:auto;background:#fff;border-radius:18px;padding:28px;box-shadow:0 12px 40px #10204018}
+h1{margin:0 0 8px}.sub{color:#5b6578;margin:0 0 24px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.card{border:2px dashed #b8c4d6;border-radius:14px;padding:18px;background:#fafcff}.card strong{display:block;margin-bottom:10px}
+input{width:100%}label{font-weight:650}.controls{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:22px 0}
+select,button{font:inherit;border-radius:10px;padding:12px}select{border:1px solid #c8d1df;background:white}
+button{width:100%;border:0;background:#1267d6;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}
+progress{width:100%;height:18px;margin-top:16px}.status{min-height:24px;color:#42506a;margin:10px 0}.result{display:none;margin-top:22px}
+video{width:100%;background:#111;border-radius:12px}.download{display:inline-block;margin-top:12px;padding:11px 16px;border-radius:10px;background:#177245;color:#fff;text-decoration:none;font-weight:700}
+.note{font-size:13px;color:#687386;margin-top:20px}@media(max-width:680px){body{padding:14px}.grid,.controls{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main class="app">
+<h1>RoboDK Side-by-Side Video Maker</h1>
+<p class="sub">Select two camera-angle videos, combine them in your browser, then download one MP4.</p>
+<section class="grid">
+<div class="card"><strong>Left camera angle</strong><input id="left" type="file" accept="video/*"></div>
+<div class="card"><strong>Right camera angle</strong><input id="right" type="file" accept="video/*"></div>
+</section>
+<section class="controls">
+<div><label for="height">Output height</label><select id="height"><option value="540">540p per view</option><option value="720" selected>720p per view</option><option value="1080">1080p per view</option></select></div>
+<div><label for="end">When lengths differ</label><select id="end"><option value="shortest" selected>Stop at shorter video</option><option value="pad">Hold last frame to longer video</option></select></div>
+</section>
+<button id="make">Combine videos</button><progress id="progress" max="1" value="0"></progress><div id="status" class="status">Ready.</div>
+<section id="result" class="result"><video id="preview" controls></video><a id="download" class="download" download="robodk-side-by-side.mp4">Download combined MP4</a></section>
+<p class="note">Processing happens locally in this browser tab. The videos are not uploaded to a server. Keep this tab open until encoding finishes.</p>
+</main>
+<script type="module">
+import { FFmpeg } from 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js';
+import { fetchFile, toBlobURL } from 'https://unpkg.com/@ffmpeg/util@0.12.2/dist/esm/index.js';
+const $=id=>document.getElementById(id), ffmpeg=new FFmpeg(); let loaded=false, outputUrl='';
+ffmpeg.on('progress',({progress})=>{$('progress').value=Math.max(0,Math.min(1,progress||0));});
+ffmpeg.on('log',({message})=>{if(message.includes('frame=')) $('status').textContent='Encoding combined video...';});
+async function loadEngine(){if(loaded)return;$('status').textContent='Loading video engine...';
+ const base='https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
+ await ffmpeg.load({coreURL:await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),wasmURL:await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm')});loaded=true;}
+function ext(file){const m=file.name.match(/\.([a-z0-9]+)$/i);return m?m[1].toLowerCase():'mp4';}
+$('make').addEventListener('click',async()=>{const a=$('left').files[0],b=$('right').files[0];if(!a||!b){$('status').textContent='Select both videos first.';return;}
+ $('make').disabled=true;$('result').style.display='none';$('progress').value=0;
+ try{await loadEngine();const an=`left.${ext(a)}`,bn=`right.${ext(b)}`;await ffmpeg.writeFile(an,await fetchFile(a));await ffmpeg.writeFile(bn,await fetchFile(b));
+ const h=Number($('height').value),w=Math.round(h*16/9/2)*2;let filter;
+ if($('end').value==='pad') filter=`[0:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black,tpad=stop_mode=clone:stop_duration=86400[left];[1:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black,tpad=stop_mode=clone:stop_duration=86400[right];[left][right]hstack=inputs=2:shortest=1[out]`;
+ else filter=`[0:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black[left];[1:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black[right];[left][right]hstack=inputs=2:shortest=1[out]`;
+ $('status').textContent='Encoding combined video...';await ffmpeg.exec(['-i',an,'-i',bn,'-filter_complex',filter,'-map','[out]','-an','-c:v','libx264','-preset','ultrafast','-crf','23','-pix_fmt','yuv420p','-movflags','+faststart','output.mp4']);
+ const data=await ffmpeg.readFile('output.mp4');if(outputUrl)URL.revokeObjectURL(outputUrl);outputUrl=URL.createObjectURL(new Blob([data.buffer],{type:'video/mp4'}));$('preview').src=outputUrl;$('download').href=outputUrl;$('result').style.display='block';$('status').textContent='Done. Preview or download the combined MP4.';
+ await ffmpeg.deleteFile(an);await ffmpeg.deleteFile(bn);await ffmpeg.deleteFile('output.mp4');
+ }catch(e){console.error(e);$('status').textContent='Could not process these files. Try Chrome or Edge, shorter MP4 files, or 540p output.';}finally{$('make').disabled=false;}});
+</script></body></html>
